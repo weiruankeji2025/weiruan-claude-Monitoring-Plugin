@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         威软Claude用量检测
 // @namespace    https://github.com/weiruankeji2025
-// @version      2.1.0
-// @description  Claude AI 用量检测插件 - 实时监控使用量、显示恢复时间、版本检测、用量百分比统计等功能
+// @version      2.2.0
+// @description  Claude AI 用量检测插件 - 实时监控使用量、显示恢复时间、版本检测、用量百分比统计、历史数据图表等功能
 // @author       威软科技 (WeiRuan Tech)
 // @match        https://claude.ai/*
 // @icon         https://claude.ai/favicon.ico
@@ -24,7 +24,8 @@
     const CONFIG = {
         CHECK_INTERVAL: 3000,
         STORAGE_PREFIX: 'weiruan_claude_',
-        VERSION: '2.1.0',
+        VERSION: '2.2.0',
+        HISTORY_DAYS: 30, // 保留历史数据天数
         ENABLE_NOTIFICATIONS: true,
         DEBUG: true, // 开启调试模式便于排查
 
@@ -558,10 +559,132 @@
         }
     }
 
+    // ==================== 历史数据管理器 ====================
+    class HistoryManager {
+        constructor() {
+            this.historyData = [];
+            this.loadHistory();
+        }
+
+        loadHistory() {
+            const saved = Utils.storage.get('historyData', []);
+            this.historyData = Array.isArray(saved) ? saved : [];
+            this.cleanOldHistory();
+            Utils.log('加载历史数据:', this.historyData.length, '条记录');
+        }
+
+        saveHistory() {
+            Utils.storage.set('historyData', this.historyData);
+        }
+
+        cleanOldHistory() {
+            const cutoffDate = new Date();
+            cutoffDate.setDate(cutoffDate.getDate() - CONFIG.HISTORY_DAYS);
+            const cutoffTime = cutoffDate.getTime();
+
+            this.historyData = this.historyData.filter(record => record.timestamp >= cutoffTime);
+            this.saveHistory();
+        }
+
+        // 记录每日汇总数据
+        recordDailySummary(dailyStats) {
+            const today = new Date().toDateString();
+            const todayTimestamp = new Date(today).getTime();
+
+            // 检查今天是否已有记录
+            const existingIndex = this.historyData.findIndex(r =>
+                new Date(r.timestamp).toDateString() === today
+            );
+
+            const record = {
+                timestamp: todayTimestamp,
+                date: today,
+                messages: dailyStats.messages || 0,
+                limits: dailyStats.limits || 0,
+                updatedAt: Date.now()
+            };
+
+            if (existingIndex >= 0) {
+                this.historyData[existingIndex] = record;
+            } else {
+                this.historyData.push(record);
+            }
+
+            // 按时间排序
+            this.historyData.sort((a, b) => a.timestamp - b.timestamp);
+            this.saveHistory();
+        }
+
+        // 获取最近N天的历史数据
+        getRecentHistory(days = 7) {
+            const result = [];
+            const now = new Date();
+
+            for (let i = days - 1; i >= 0; i--) {
+                const date = new Date(now);
+                date.setDate(date.getDate() - i);
+                const dateStr = date.toDateString();
+
+                const record = this.historyData.find(r =>
+                    new Date(r.timestamp).toDateString() === dateStr
+                );
+
+                result.push({
+                    date: dateStr,
+                    shortDate: `${date.getMonth() + 1}/${date.getDate()}`,
+                    dayName: ['日', '一', '二', '三', '四', '五', '六'][date.getDay()],
+                    messages: record?.messages || 0,
+                    limits: record?.limits || 0
+                });
+            }
+
+            return result;
+        }
+
+        // 获取统计摘要
+        getStatsSummary() {
+            const last7Days = this.getRecentHistory(7);
+            const last30Days = this.getRecentHistory(30);
+
+            const sum7 = last7Days.reduce((acc, d) => acc + d.messages, 0);
+            const sum30 = last30Days.reduce((acc, d) => acc + d.messages, 0);
+            const limits7 = last7Days.reduce((acc, d) => acc + d.limits, 0);
+            const limits30 = last30Days.reduce((acc, d) => acc + d.limits, 0);
+
+            const avg7 = Math.round(sum7 / 7);
+            const avg30 = Math.round(sum30 / 30);
+            const max7 = Math.max(...last7Days.map(d => d.messages));
+            const maxDay = last7Days.find(d => d.messages === max7);
+
+            return {
+                totalMessages7Days: sum7,
+                totalMessages30Days: sum30,
+                avgMessages7Days: avg7,
+                avgMessages30Days: avg30,
+                maxMessages7Days: max7,
+                maxMessagesDay: maxDay?.shortDate || '-',
+                totalLimits7Days: limits7,
+                totalLimits30Days: limits30
+            };
+        }
+
+        // 获取用于图表的数据
+        getChartData(days = 7) {
+            const history = this.getRecentHistory(days);
+            const maxMessages = Math.max(...history.map(d => d.messages), 1);
+
+            return history.map(d => ({
+                ...d,
+                percentage: Math.round((d.messages / maxMessages) * 100)
+            }));
+        }
+    }
+
     // ==================== 用量检测器 ====================
     class UsageDetector {
         constructor(planDetector) {
             this.planDetector = planDetector;
+            this.historyManager = new HistoryManager();
             this.usageData = {
                 isLimited: false,
                 limitDetectedAt: null,
@@ -631,6 +754,10 @@
             this.usageData.dailyStats[today].messages++;
 
             this.saveData();
+
+            // 记录到历史数据
+            this.historyManager.recordDailySummary(this.usageData.dailyStats[today]);
+
             this.updateUI();
 
             Utils.log('消息计数更新:', {
@@ -654,6 +781,10 @@
             }
 
             this.saveData();
+
+            // 记录到历史数据
+            this.historyManager.recordDailySummary(this.usageData.dailyStats[today]);
+
             this.updateUI();
 
             Utils.notify('⚠️ Claude 用量限制',
@@ -784,6 +915,16 @@
                 this.onMessageSent();
             }
             Utils.log(`手动增加 ${count} 条消息`);
+        }
+
+        // 获取历史数据
+        getHistoryData(days = 7) {
+            return this.historyManager.getChartData(days);
+        }
+
+        // 获取历史统计摘要
+        getHistorySummary() {
+            return this.historyManager.getStatsSummary();
         }
     }
 
@@ -1075,6 +1216,162 @@
                     from { transform: translateX(100%); opacity: 0; }
                     to { transform: translateX(0); opacity: 1; }
                 }
+
+                /* 历史数据图表样式 */
+                .weiruan-history-section {
+                    padding: 12px 15px;
+                    border-bottom: 1px solid #eee;
+                }
+
+                .weiruan-history-header {
+                    display: flex;
+                    justify-content: space-between;
+                    align-items: center;
+                    margin-bottom: 12px;
+                }
+
+                .weiruan-history-tabs {
+                    display: flex;
+                    gap: 5px;
+                }
+
+                .weiruan-history-tab {
+                    padding: 4px 10px;
+                    border: none;
+                    background: #f0f0f0;
+                    color: #666;
+                    border-radius: 12px;
+                    font-size: 11px;
+                    cursor: pointer;
+                    transition: all 0.2s;
+                }
+
+                .weiruan-history-tab.active {
+                    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+                    color: white;
+                }
+
+                .weiruan-history-tab:hover:not(.active) {
+                    background: #e0e0e0;
+                }
+
+                .weiruan-chart-container {
+                    height: 120px;
+                    display: flex;
+                    align-items: flex-end;
+                    justify-content: space-between;
+                    gap: 4px;
+                    padding: 10px 0;
+                }
+
+                .weiruan-chart-bar-wrapper {
+                    flex: 1;
+                    display: flex;
+                    flex-direction: column;
+                    align-items: center;
+                    height: 100%;
+                }
+
+                .weiruan-chart-bar-container {
+                    flex: 1;
+                    width: 100%;
+                    display: flex;
+                    align-items: flex-end;
+                    justify-content: center;
+                }
+
+                .weiruan-chart-bar {
+                    width: 80%;
+                    max-width: 30px;
+                    background: linear-gradient(180deg, #667eea 0%, #764ba2 100%);
+                    border-radius: 4px 4px 0 0;
+                    min-height: 4px;
+                    transition: height 0.3s ease;
+                    cursor: pointer;
+                    position: relative;
+                }
+
+                .weiruan-chart-bar:hover {
+                    opacity: 0.8;
+                }
+
+                .weiruan-chart-bar.today {
+                    background: linear-gradient(180deg, #4CAF50 0%, #2E7D32 100%);
+                }
+
+                .weiruan-chart-bar.has-limit {
+                    background: linear-gradient(180deg, #FF5722 0%, #F44336 100%);
+                }
+
+                .weiruan-chart-bar-tooltip {
+                    position: absolute;
+                    bottom: 100%;
+                    left: 50%;
+                    transform: translateX(-50%);
+                    background: #333;
+                    color: white;
+                    padding: 4px 8px;
+                    border-radius: 4px;
+                    font-size: 10px;
+                    white-space: nowrap;
+                    opacity: 0;
+                    pointer-events: none;
+                    transition: opacity 0.2s;
+                    z-index: 10;
+                }
+
+                .weiruan-chart-bar:hover .weiruan-chart-bar-tooltip {
+                    opacity: 1;
+                }
+
+                .weiruan-chart-label {
+                    font-size: 9px;
+                    color: #888;
+                    margin-top: 4px;
+                    text-align: center;
+                }
+
+                .weiruan-chart-label.today {
+                    color: #4CAF50;
+                    font-weight: 600;
+                }
+
+                .weiruan-history-summary {
+                    display: grid;
+                    grid-template-columns: repeat(2, 1fr);
+                    gap: 8px;
+                    margin-top: 12px;
+                    padding-top: 12px;
+                    border-top: 1px solid #eee;
+                }
+
+                .weiruan-summary-item {
+                    text-align: center;
+                    padding: 8px;
+                    background: #f8f9fa;
+                    border-radius: 6px;
+                }
+
+                .weiruan-summary-value {
+                    font-size: 16px;
+                    font-weight: 700;
+                    color: #667eea;
+                }
+
+                .weiruan-summary-label {
+                    font-size: 10px;
+                    color: #888;
+                    margin-top: 2px;
+                }
+
+                @media (prefers-color-scheme: dark) {
+                    .weiruan-history-section { border-bottom-color: #333; }
+                    .weiruan-history-tab { background: #333; color: #ccc; }
+                    .weiruan-history-tab:hover:not(.active) { background: #444; }
+                    .weiruan-chart-label { color: #aaa; }
+                    .weiruan-history-summary { border-top-color: #333; }
+                    .weiruan-summary-item { background: #2d2d2d; }
+                }
             `);
         }
 
@@ -1157,6 +1454,38 @@
                     <div class="weiruan-countdown-section" id="weiruan-countdown-section" style="display: none;">
                         <div class="weiruan-countdown" id="weiruan-countdown">--:--:--</div>
                         <div class="weiruan-reset-time">预计恢复时间: <span id="weiruan-reset-time">--</span></div>
+                    </div>
+
+                    <div class="weiruan-history-section">
+                        <div class="weiruan-history-header">
+                            <div class="weiruan-section-title" style="margin-bottom: 0;">历史趋势</div>
+                            <div class="weiruan-history-tabs">
+                                <button class="weiruan-history-tab active" data-days="7">7天</button>
+                                <button class="weiruan-history-tab" data-days="14">14天</button>
+                                <button class="weiruan-history-tab" data-days="30">30天</button>
+                            </div>
+                        </div>
+                        <div class="weiruan-chart-container" id="weiruan-history-chart">
+                            <!-- 图表将通过JS动态生成 -->
+                        </div>
+                        <div class="weiruan-history-summary" id="weiruan-history-summary">
+                            <div class="weiruan-summary-item">
+                                <div class="weiruan-summary-value" id="weiruan-avg-messages">0</div>
+                                <div class="weiruan-summary-label">日均消息</div>
+                            </div>
+                            <div class="weiruan-summary-item">
+                                <div class="weiruan-summary-value" id="weiruan-total-messages">0</div>
+                                <div class="weiruan-summary-label">周期总量</div>
+                            </div>
+                            <div class="weiruan-summary-item">
+                                <div class="weiruan-summary-value" id="weiruan-max-messages">0</div>
+                                <div class="weiruan-summary-label">单日最高</div>
+                            </div>
+                            <div class="weiruan-summary-item">
+                                <div class="weiruan-summary-value" id="weiruan-total-limits">0</div>
+                                <div class="weiruan-summary-label">触发限制</div>
+                            </div>
+                        </div>
                     </div>
 
                     <div class="weiruan-section">
@@ -1252,6 +1581,17 @@
                     this.showNotification(`已切换到 ${CONFIG.PLAN_LIMITS[plan].displayName}`);
                 });
             });
+
+            // 历史图表标签切换
+            this.currentHistoryDays = 7;
+            document.querySelectorAll('.weiruan-history-tab').forEach(tab => {
+                tab.addEventListener('click', () => {
+                    document.querySelectorAll('.weiruan-history-tab').forEach(t => t.classList.remove('active'));
+                    tab.classList.add('active');
+                    this.currentHistoryDays = parseInt(tab.dataset.days);
+                    this.updateHistoryChart();
+                });
+            });
         }
 
         makeDraggable(element) {
@@ -1334,6 +1674,62 @@
             document.getElementById('weiruan-today-msgs').textContent = status.todayMessages;
             document.getElementById('weiruan-session-time').textContent = status.sessionDuration;
             document.getElementById('weiruan-today-limits').textContent = status.todayLimits;
+
+            // 更新历史图表
+            this.updateHistoryChart();
+        }
+
+        updateHistoryChart() {
+            const days = this.currentHistoryDays || 7;
+            const historyData = this.detector.getHistoryData(days);
+            const chartContainer = document.getElementById('weiruan-history-chart');
+
+            if (!chartContainer) return;
+
+            const today = new Date().toDateString();
+            const maxMessages = Math.max(...historyData.map(d => d.messages), 1);
+
+            // 生成柱状图
+            let chartHTML = '';
+            historyData.forEach((data, index) => {
+                const height = Math.max(4, (data.messages / maxMessages) * 100);
+                const isToday = data.date === today;
+                const hasLimit = data.limits > 0;
+
+                let barClass = 'weiruan-chart-bar';
+                if (isToday) barClass += ' today';
+                if (hasLimit) barClass += ' has-limit';
+
+                const labelClass = isToday ? 'weiruan-chart-label today' : 'weiruan-chart-label';
+                const displayLabel = days <= 7 ? `${data.shortDate}<br>${data.dayName}` : data.shortDate;
+
+                chartHTML += `
+                    <div class="weiruan-chart-bar-wrapper">
+                        <div class="weiruan-chart-bar-container">
+                            <div class="${barClass}" style="height: ${height}%">
+                                <div class="weiruan-chart-bar-tooltip">
+                                    ${data.shortDate}: ${data.messages}条消息${hasLimit ? ` (${data.limits}次限制)` : ''}
+                                </div>
+                            </div>
+                        </div>
+                        <div class="${labelClass}">${displayLabel}</div>
+                    </div>
+                `;
+            });
+
+            chartContainer.innerHTML = chartHTML;
+
+            // 更新统计摘要
+            const summary = this.detector.getHistorySummary();
+            const totalMessages = historyData.reduce((sum, d) => sum + d.messages, 0);
+            const avgMessages = Math.round(totalMessages / days);
+            const maxDayMessages = Math.max(...historyData.map(d => d.messages));
+            const totalLimits = historyData.reduce((sum, d) => sum + d.limits, 0);
+
+            document.getElementById('weiruan-avg-messages').textContent = avgMessages;
+            document.getElementById('weiruan-total-messages').textContent = totalMessages;
+            document.getElementById('weiruan-max-messages').textContent = maxDayMessages;
+            document.getElementById('weiruan-total-limits').textContent = totalLimits;
         }
 
         exportStats() {
@@ -1345,7 +1741,13 @@
                 planConfig: status.planConfig,
                 currentStatus: status,
                 usagePercentage: status.usagePercentage,
-                dailyStats: this.detector.usageData.dailyStats
+                dailyStats: this.detector.usageData.dailyStats,
+                historyData: {
+                    last7Days: this.detector.getHistoryData(7),
+                    last14Days: this.detector.getHistoryData(14),
+                    last30Days: this.detector.getHistoryData(30),
+                    summary: this.detector.getHistorySummary()
+                }
             };
 
             const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
@@ -1374,7 +1776,7 @@
 
     // ==================== 初始化 ====================
     async function init() {
-        Utils.log('初始化威软Claude用量检测 v2.1...');
+        Utils.log('初始化威软Claude用量检测 v2.2...');
 
         const planDetector = new PlanDetector();
 
@@ -1393,9 +1795,11 @@
         window.weiruanUI = ui;
         window.weiruanDetector = detector;
         window.weiruanPlanDetector = planDetector;
+        window.weiruanHistoryManager = detector.historyManager;
 
         // 暴露手动添加方法到控制台
         window.weiruanAddMessage = (count) => detector.manualAddMessage(count || 1);
+        window.weiruanGetHistory = (days) => detector.getHistoryData(days || 7);
 
         setInterval(() => {
             detector.checkPageForLimits();
@@ -1405,7 +1809,9 @@
         ui.update(detector.getStatus());
 
         Utils.log('威软Claude用量检测已启动');
-        Utils.log('提示: 可在控制台使用 weiruanAddMessage(n) 手动添加消息计数');
+        Utils.log('提示: 可在控制台使用以下命令:');
+        Utils.log('  - weiruanAddMessage(n): 手动添加n条消息计数');
+        Utils.log('  - weiruanGetHistory(days): 获取历史数据');
     }
 
     // 等待页面加载
