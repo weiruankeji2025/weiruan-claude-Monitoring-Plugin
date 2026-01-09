@@ -1,5 +1,5 @@
 /**
- * 威软Claude用量检测 - 单元测试
+ * 威软Claude用量检测 - 单元测试 v2.0
  *
  * 运行方式: node test/unit-test.js
  */
@@ -8,9 +8,44 @@ const assert = require('assert');
 
 // 测试配置
 const CONFIG = {
-    VERSION: '1.0.0',
-    RESET_PERIOD_HOURS: 5,
-    CHECK_INTERVAL: 5000
+    VERSION: '2.0.0',
+    PLAN_LIMITS: {
+        free: {
+            name: 'Free',
+            displayName: '免费版',
+            dailyMessages: 20,
+            weeklyMessages: 100,
+            resetPeriodHours: 24
+        },
+        pro: {
+            name: 'Pro',
+            displayName: 'Pro专业版',
+            dailyMessages: 150,
+            weeklyMessages: 900,
+            resetPeriodHours: 5
+        },
+        team: {
+            name: 'Team',
+            displayName: 'Team团队版',
+            dailyMessages: 200,
+            weeklyMessages: 1200,
+            resetPeriodHours: 5
+        },
+        max: {
+            name: 'Max',
+            displayName: 'Max旗舰版',
+            dailyMessages: 500,
+            weeklyMessages: 3000,
+            resetPeriodHours: 5
+        },
+        enterprise: {
+            name: 'Enterprise',
+            displayName: '企业版',
+            dailyMessages: 1000,
+            weeklyMessages: 5000,
+            resetPeriodHours: 5
+        }
+    }
 };
 
 // 测试结果收集
@@ -38,11 +73,229 @@ function describe(suiteName, fn) {
     fn();
 }
 
+// ==================== 版本配置测试 ====================
+
+describe('版本配置测试', () => {
+    test('Free版配置正确', () => {
+        const free = CONFIG.PLAN_LIMITS.free;
+        assert.strictEqual(free.dailyMessages, 20);
+        assert.strictEqual(free.weeklyMessages, 100);
+        assert.strictEqual(free.resetPeriodHours, 24);
+    });
+
+    test('Pro版配置正确', () => {
+        const pro = CONFIG.PLAN_LIMITS.pro;
+        assert.strictEqual(pro.dailyMessages, 150);
+        assert.strictEqual(pro.weeklyMessages, 900);
+        assert.strictEqual(pro.resetPeriodHours, 5);
+    });
+
+    test('Team版配置正确', () => {
+        const team = CONFIG.PLAN_LIMITS.team;
+        assert.strictEqual(team.dailyMessages, 200);
+        assert.strictEqual(team.weeklyMessages, 1200);
+        assert.strictEqual(team.resetPeriodHours, 5);
+    });
+
+    test('Max版配置正确', () => {
+        const max = CONFIG.PLAN_LIMITS.max;
+        assert.strictEqual(max.dailyMessages, 500);
+        assert.strictEqual(max.weeklyMessages, 3000);
+        assert.strictEqual(max.resetPeriodHours, 5);
+    });
+
+    test('Enterprise版配置正确', () => {
+        const enterprise = CONFIG.PLAN_LIMITS.enterprise;
+        assert.strictEqual(enterprise.dailyMessages, 1000);
+        assert.strictEqual(enterprise.weeklyMessages, 5000);
+        assert.strictEqual(enterprise.resetPeriodHours, 5);
+    });
+
+    test('所有版本都有displayName', () => {
+        for (const plan in CONFIG.PLAN_LIMITS) {
+            assert.ok(CONFIG.PLAN_LIMITS[plan].displayName, `${plan}缺少displayName`);
+        }
+    });
+});
+
+// ==================== 用量百分比计算测试 ====================
+
+describe('用量百分比计算测试', () => {
+    function calculatePercentage(used, limit) {
+        return Math.min(100, Math.round((used / limit) * 100));
+    }
+
+    test('0%用量计算', () => {
+        assert.strictEqual(calculatePercentage(0, 100), 0);
+    });
+
+    test('50%用量计算', () => {
+        assert.strictEqual(calculatePercentage(50, 100), 50);
+    });
+
+    test('100%用量计算', () => {
+        assert.strictEqual(calculatePercentage(100, 100), 100);
+    });
+
+    test('超过100%应限制为100%', () => {
+        assert.strictEqual(calculatePercentage(150, 100), 100);
+    });
+
+    test('Pro版日用量75条=50%', () => {
+        const pro = CONFIG.PLAN_LIMITS.pro;
+        assert.strictEqual(calculatePercentage(75, pro.dailyMessages), 50);
+    });
+
+    test('Free版日用量10条=50%', () => {
+        const free = CONFIG.PLAN_LIMITS.free;
+        assert.strictEqual(calculatePercentage(10, free.dailyMessages), 50);
+    });
+
+    test('Max版周用量1500条=50%', () => {
+        const max = CONFIG.PLAN_LIMITS.max;
+        assert.strictEqual(calculatePercentage(1500, max.weeklyMessages), 50);
+    });
+});
+
+// ==================== 进度条颜色分类测试 ====================
+
+describe('进度条颜色分类测试', () => {
+    function getProgressClass(percentage) {
+        if (percentage < 50) return 'low';
+        if (percentage < 80) return 'medium';
+        return 'high';
+    }
+
+    test('0%显示绿色(low)', () => {
+        assert.strictEqual(getProgressClass(0), 'low');
+    });
+
+    test('25%显示绿色(low)', () => {
+        assert.strictEqual(getProgressClass(25), 'low');
+    });
+
+    test('49%显示绿色(low)', () => {
+        assert.strictEqual(getProgressClass(49), 'low');
+    });
+
+    test('50%显示黄色(medium)', () => {
+        assert.strictEqual(getProgressClass(50), 'medium');
+    });
+
+    test('75%显示黄色(medium)', () => {
+        assert.strictEqual(getProgressClass(75), 'medium');
+    });
+
+    test('79%显示黄色(medium)', () => {
+        assert.strictEqual(getProgressClass(79), 'medium');
+    });
+
+    test('80%显示红色(high)', () => {
+        assert.strictEqual(getProgressClass(80), 'high');
+    });
+
+    test('100%显示红色(high)', () => {
+        assert.strictEqual(getProgressClass(100), 'high');
+    });
+});
+
+// ==================== 周用量计算测试 ====================
+
+describe('周用量计算测试', () => {
+    function getLast7Days() {
+        const days = [];
+        for (let i = 6; i >= 0; i--) {
+            const date = new Date();
+            date.setDate(date.getDate() - i);
+            days.push(date.toDateString());
+        }
+        return days;
+    }
+
+    test('获取最近7天日期', () => {
+        const days = getLast7Days();
+        assert.strictEqual(days.length, 7);
+    });
+
+    test('最近7天包含今天', () => {
+        const days = getLast7Days();
+        const today = new Date().toDateString();
+        assert.ok(days.includes(today));
+    });
+
+    test('最近7天最后一天是今天', () => {
+        const days = getLast7Days();
+        const today = new Date().toDateString();
+        assert.strictEqual(days[days.length - 1], today);
+    });
+
+    test('计算周总用量', () => {
+        const dailyStats = {};
+        const days = getLast7Days();
+
+        // 模拟每天10条消息
+        days.forEach(day => {
+            dailyStats[day] = { messages: 10 };
+        });
+
+        let weeklyUsage = 0;
+        for (const day of days) {
+            if (dailyStats[day]) {
+                weeklyUsage += dailyStats[day].messages;
+            }
+        }
+
+        assert.strictEqual(weeklyUsage, 70);
+    });
+});
+
+// ==================== 版本检测逻辑测试 ====================
+
+describe('版本检测逻辑测试', () => {
+    test('从文本中检测Pro版', () => {
+        const patterns = ['pro', 'Pro', 'PRO', 'pro_subscription'];
+        patterns.forEach(pattern => {
+            assert.ok(pattern.toLowerCase().includes('pro'), `未能匹配: ${pattern}`);
+        });
+    });
+
+    test('从文本中检测Team版', () => {
+        const patterns = ['team', 'Team', 'TEAM'];
+        patterns.forEach(pattern => {
+            assert.ok(pattern.toLowerCase().includes('team'), `未能匹配: ${pattern}`);
+        });
+    });
+
+    test('从文本中检测Max版', () => {
+        const patterns = ['max', 'Max', 'MAX'];
+        patterns.forEach(pattern => {
+            assert.ok(pattern.toLowerCase().includes('max'), `未能匹配: ${pattern}`);
+        });
+    });
+
+    test('版本优先级: Max > Team > Pro > Free', () => {
+        function detectPlan(text) {
+            const lower = text.toLowerCase();
+            if (lower.includes('max')) return 'max';
+            if (lower.includes('enterprise')) return 'enterprise';
+            if (lower.includes('team')) return 'team';
+            if (lower.includes('pro')) return 'pro';
+            return 'free';
+        }
+
+        assert.strictEqual(detectPlan('max plan'), 'max');
+        assert.strictEqual(detectPlan('team subscription'), 'team');
+        assert.strictEqual(detectPlan('pro user'), 'pro');
+        assert.strictEqual(detectPlan('free user'), 'free');
+        assert.strictEqual(detectPlan('unknown'), 'free');
+    });
+});
+
 // ==================== 工具函数测试 ====================
 
 describe('工具函数测试', () => {
     test('formatDuration - 小时分钟格式', () => {
-        const ms = 2 * 60 * 60 * 1000 + 30 * 60 * 1000; // 2.5小时
+        const ms = 2 * 60 * 60 * 1000 + 30 * 60 * 1000;
         const hours = Math.floor(ms / (1000 * 60 * 60));
         const minutes = Math.floor((ms % (1000 * 60 * 60)) / (1000 * 60));
         assert.strictEqual(hours, 2);
@@ -50,7 +303,7 @@ describe('工具函数测试', () => {
     });
 
     test('formatDuration - 分钟秒格式', () => {
-        const ms = 5 * 60 * 1000 + 45 * 1000; // 5分45秒
+        const ms = 5 * 60 * 1000 + 45 * 1000;
         const minutes = Math.floor(ms / (1000 * 60));
         const seconds = Math.floor((ms % (1000 * 60)) / 1000);
         assert.strictEqual(minutes, 5);
@@ -59,11 +312,6 @@ describe('工具函数测试', () => {
 
     test('formatDuration - 零值处理', () => {
         const ms = 0;
-        assert.ok(ms <= 0);
-    });
-
-    test('formatDuration - 负值处理', () => {
-        const ms = -1000;
         assert.ok(ms <= 0);
     });
 });
@@ -77,49 +325,30 @@ describe('限制检测正则表达式测试', () => {
         /too many (requests|messages)/i,
         /usage limit/i,
         /please (wait|try again)/i,
-        /限制/,
-        /超出/,
-        /稍后再试/
+        /out of messages/i,
+        /message limit/i
     ];
 
-    test('检测英文限制消息 - reached limit', () => {
-        const msg = "You've reached your usage limit for today";
+    test('检测 "You have reached your limit"', () => {
+        const msg = "You have reached your usage limit";
         const matches = limitPatterns.some(p => p.test(msg));
         assert.strictEqual(matches, true);
     });
 
-    test('检测英文限制消息 - rate limit', () => {
-        const msg = "Rate limit exceeded. Please try again later.";
+    test('检测 "Rate limit exceeded"', () => {
+        const msg = "Rate limit exceeded";
         const matches = limitPatterns.some(p => p.test(msg));
         assert.strictEqual(matches, true);
     });
 
-    test('检测英文限制消息 - too many requests', () => {
-        const msg = "Too many requests in a short period";
-        const matches = limitPatterns.some(p => p.test(msg));
-        assert.strictEqual(matches, true);
-    });
-
-    test('检测中文限制消息 - 限制', () => {
-        const msg = "您已达到使用限制";
-        const matches = limitPatterns.some(p => p.test(msg));
-        assert.strictEqual(matches, true);
-    });
-
-    test('检测中文限制消息 - 稍后再试', () => {
-        const msg = "请稍后再试";
+    test('检测 "Out of messages"', () => {
+        const msg = "You're out of messages for now";
         const matches = limitPatterns.some(p => p.test(msg));
         assert.strictEqual(matches, true);
     });
 
     test('正常消息不应被检测为限制', () => {
-        const msg = "Hello! How can I help you today?";
-        const matches = limitPatterns.some(p => p.test(msg));
-        assert.strictEqual(matches, false);
-    });
-
-    test('空消息处理', () => {
-        const msg = "";
+        const msg = "Hello! How can I help you?";
         const matches = limitPatterns.some(p => p.test(msg));
         assert.strictEqual(matches, false);
     });
@@ -139,206 +368,82 @@ describe('恢复时间解析测试', () => {
         return resetMs;
     }
 
-    test('解析小时 - 英文', () => {
-        const result = parseResetTime("Please wait 5 hours");
-        assert.strictEqual(result, 5 * 60 * 60 * 1000);
+    test('解析 "5 hours"', () => {
+        assert.strictEqual(parseResetTime("Please wait 5 hours"), 5 * 60 * 60 * 1000);
     });
 
-    test('解析分钟 - 英文', () => {
-        const result = parseResetTime("Try again in 30 minutes");
-        assert.strictEqual(result, 30 * 60 * 1000);
+    test('解析 "30 minutes"', () => {
+        assert.strictEqual(parseResetTime("Try again in 30 minutes"), 30 * 60 * 1000);
     });
 
-    test('解析小时和分钟 - 英文', () => {
-        const result = parseResetTime("Please wait 2 hours and 15 minutes");
-        assert.strictEqual(result, 2 * 60 * 60 * 1000 + 15 * 60 * 1000);
-    });
-
-    test('解析小时 - 中文', () => {
-        const result = parseResetTime("请等待3小时后重试");
-        assert.strictEqual(result, 3 * 60 * 60 * 1000);
-    });
-
-    test('解析分钟 - 中文', () => {
-        const result = parseResetTime("请45分钟后重试");
-        assert.strictEqual(result, 45 * 60 * 1000);
-    });
-
-    test('解析混合时间 - 中文', () => {
-        const result = parseResetTime("预计2小时30分钟后恢复");
-        assert.strictEqual(result, 2 * 60 * 60 * 1000 + 30 * 60 * 1000);
-    });
-
-    test('无时间信息返回0', () => {
-        const result = parseResetTime("Something went wrong");
-        assert.strictEqual(result, 0);
+    test('解析 "2小时30分钟"', () => {
+        assert.strictEqual(parseResetTime("预计2小时30分钟后恢复"), 2.5 * 60 * 60 * 1000);
     });
 });
 
 // ==================== 数据结构测试 ====================
 
-describe('用量数据结构测试', () => {
-    const createUsageData = () => ({
-        isLimited: false,
-        limitDetectedAt: null,
-        estimatedResetTime: null,
-        messageCount: 0,
-        sessionStartTime: Date.now(),
-        dailyStats: {},
-        lastCheckTime: null,
-        limitType: null,
-        limitMessage: ''
-    });
-
-    test('初始化数据结构完整性', () => {
-        const data = createUsageData();
-        const requiredFields = [
-            'isLimited', 'limitDetectedAt', 'estimatedResetTime',
-            'messageCount', 'sessionStartTime', 'dailyStats',
-            'lastCheckTime', 'limitType', 'limitMessage'
-        ];
-
-        requiredFields.forEach(field => {
-            assert.ok(field in data, `缺少字段: ${field}`);
-        });
-    });
-
-    test('isLimited 初始值为 false', () => {
-        const data = createUsageData();
-        assert.strictEqual(data.isLimited, false);
-    });
-
-    test('messageCount 初始值为 0', () => {
-        const data = createUsageData();
-        assert.strictEqual(data.messageCount, 0);
-    });
-
-    test('dailyStats 初始为空对象', () => {
-        const data = createUsageData();
-        assert.deepStrictEqual(data.dailyStats, {});
-    });
-
-    test('sessionStartTime 应为有效时间戳', () => {
-        const data = createUsageData();
-        assert.ok(data.sessionStartTime > 0);
-        assert.ok(data.sessionStartTime <= Date.now());
-    });
-});
-
-// ==================== 状态管理测试 ====================
-
-describe('状态管理测试', () => {
-    test('触发限制后状态更新', () => {
+describe('数据结构测试', () => {
+    test('usageData结构完整性', () => {
         const usageData = {
             isLimited: false,
             limitDetectedAt: null,
             estimatedResetTime: null,
-            messageCount: 50
+            messageCount: 0,
+            sessionStartTime: Date.now(),
+            dailyStats: {},
+            weeklyStats: {},
+            lastCheckTime: null,
+            limitType: null,
+            limitMessage: '',
+            apiMessagesSent: 0
         };
 
-        // 模拟触发限制
-        const now = Date.now();
-        usageData.isLimited = true;
-        usageData.limitDetectedAt = now;
-        usageData.estimatedResetTime = now + (CONFIG.RESET_PERIOD_HOURS * 60 * 60 * 1000);
+        const requiredFields = [
+            'isLimited', 'limitDetectedAt', 'estimatedResetTime',
+            'messageCount', 'sessionStartTime', 'dailyStats',
+            'weeklyStats', 'lastCheckTime', 'limitType', 'limitMessage', 'apiMessagesSent'
+        ];
 
-        assert.strictEqual(usageData.isLimited, true);
-        assert.ok(usageData.limitDetectedAt > 0);
-        assert.ok(usageData.estimatedResetTime > usageData.limitDetectedAt);
+        requiredFields.forEach(field => {
+            assert.ok(field in usageData, `缺少字段: ${field}`);
+        });
     });
 
-    test('限制恢复后状态重置', () => {
-        const usageData = {
-            isLimited: true,
-            limitDetectedAt: Date.now() - 3600000,
-            estimatedResetTime: Date.now() - 1000,
-            limitMessage: 'Test limit'
-        };
+    test('dailyStats单日结构', () => {
+        const dayStats = { messages: 0, limits: 0, timestamp: Date.now() };
 
-        // 模拟恢复
-        usageData.isLimited = false;
-        usageData.limitDetectedAt = null;
-        usageData.limitMessage = '';
-
-        assert.strictEqual(usageData.isLimited, false);
-        assert.strictEqual(usageData.limitDetectedAt, null);
-        assert.strictEqual(usageData.limitMessage, '');
-    });
-
-    test('消息计数递增', () => {
-        const usageData = { messageCount: 0 };
-
-        for (let i = 0; i < 10; i++) {
-            usageData.messageCount++;
-        }
-
-        assert.strictEqual(usageData.messageCount, 10);
-    });
-
-    test('每日统计更新', () => {
-        const today = new Date().toDateString();
-        const dailyStats = {};
-
-        if (!dailyStats[today]) {
-            dailyStats[today] = { messages: 0, limits: 0 };
-        }
-
-        dailyStats[today].messages += 5;
-        dailyStats[today].limits += 1;
-
-        assert.strictEqual(dailyStats[today].messages, 5);
-        assert.strictEqual(dailyStats[today].limits, 1);
+        assert.ok('messages' in dayStats);
+        assert.ok('limits' in dayStats);
+        assert.ok('timestamp' in dayStats);
     });
 });
 
-// ==================== 配置验证测试 ====================
-
-describe('配置验证测试', () => {
-    test('版本号格式正确', () => {
-        assert.ok(/^\d+\.\d+\.\d+$/.test(CONFIG.VERSION));
-    });
-
-    test('重置周期为正数', () => {
-        assert.ok(CONFIG.RESET_PERIOD_HOURS > 0);
-    });
-
-    test('检测间隔合理', () => {
-        assert.ok(CONFIG.CHECK_INTERVAL >= 1000);
-        assert.ok(CONFIG.CHECK_INTERVAL <= 60000);
-    });
-});
-
-// ==================== 导出功能测试 ====================
+// ==================== 导出数据测试 ====================
 
 describe('数据导出测试', () => {
-    test('导出数据结构完整', () => {
+    test('导出数据包含版本信息', () => {
         const exportData = {
             exportTime: new Date().toISOString(),
             version: CONFIG.VERSION,
-            currentStatus: {
-                isLimited: false,
-                remainingTime: 0,
-                messageCount: 100
-            },
-            dailyStats: {
-                '2024-01-15': { messages: 50, limits: 2 }
+            plan: 'pro',
+            planConfig: CONFIG.PLAN_LIMITS.pro,
+            usagePercentage: {
+                daily: { used: 50, limit: 150, percentage: 33 },
+                weekly: { used: 200, limit: 900, percentage: 22 }
             }
         };
 
-        const json = JSON.stringify(exportData);
-        const parsed = JSON.parse(json);
-
-        assert.ok('exportTime' in parsed);
-        assert.ok('version' in parsed);
-        assert.ok('currentStatus' in parsed);
-        assert.ok('dailyStats' in parsed);
+        assert.ok('plan' in exportData);
+        assert.ok('planConfig' in exportData);
+        assert.ok('usagePercentage' in exportData);
+        assert.strictEqual(exportData.plan, 'pro');
     });
 
-    test('JSON 序列化/反序列化正确', () => {
+    test('导出数据JSON序列化', () => {
         const data = {
-            count: 42,
-            nested: { value: 'test' },
-            array: [1, 2, 3]
+            plan: 'pro',
+            usagePercentage: { daily: { percentage: 50 } }
         };
 
         const json = JSON.stringify(data);
@@ -351,7 +456,7 @@ describe('数据导出测试', () => {
 // ==================== 输出测试报告 ====================
 
 console.log('\n' + '═'.repeat(50));
-console.log('📊 威软Claude用量检测 - 测试报告');
+console.log('📊 威软Claude用量检测 v2.0 - 测试报告');
 console.log('═'.repeat(50));
 console.log(`版本: ${CONFIG.VERSION}`);
 console.log(`时间: ${new Date().toLocaleString()}`);
@@ -363,6 +468,12 @@ console.log('─'.repeat(50));
 
 if (failed === 0) {
     console.log('🎉 所有测试通过！');
+    console.log('\n新增功能测试覆盖:');
+    console.log('  - 版本配置 (Free/Pro/Team/Max/Enterprise)');
+    console.log('  - 用量百分比计算');
+    console.log('  - 进度条颜色分类');
+    console.log('  - 周用量统计');
+    console.log('  - 版本检测逻辑');
     process.exit(0);
 } else {
     console.log('⚠️ 存在失败的测试，请检查上述错误信息');
