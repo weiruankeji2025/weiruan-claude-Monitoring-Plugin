@@ -228,16 +228,26 @@
         // 判断是否为消息请求
         isMessageRequest(url) {
             const messagePatterns = [
+                // Claude.ai 主要API端点
+                /\/api\/organizations\/.*\/chat_conversations\/.*\/completion/i,
                 /\/api\/.*\/chat_conversations\/.*\/completion/i,
                 /\/api\/.*\/completion/i,
                 /\/api\/append_message/i,
                 /\/api\/.*\/messages/i,
                 /\/api\/chat/i,
                 /\/api\/v1\/.*\/messages/i,
-                /completion$/i
+                /completion$/i,
+                // 新版Claude API
+                /\/api\/claude\/.*\/chat/i,
+                /\/api\/generate/i,
+                /\/api\/prompt/i
             ];
 
-            return messagePatterns.some(pattern => pattern.test(url));
+            const isMatch = messagePatterns.some(pattern => pattern.test(url));
+            if (isMatch) {
+                Utils.log('匹配到消息API:', url);
+            }
+            return isMatch;
         }
 
         // 方法2: 拦截XHR请求
@@ -723,7 +733,18 @@
                 this.usageData.dailyStats[today] = { messages: 0, limits: 0, timestamp: Date.now() };
             }
 
-            Utils.log('加载数据:', this.usageData.dailyStats[today]);
+            // 检查限制状态是否应该被重置（如果限制时间已过）
+            if (this.usageData.isLimited && this.usageData.estimatedResetTime) {
+                if (Date.now() >= this.usageData.estimatedResetTime) {
+                    Utils.log('检测到限制已过期，自动重置状态');
+                    this.usageData.isLimited = false;
+                    this.usageData.limitDetectedAt = null;
+                    this.usageData.estimatedResetTime = null;
+                    this.usageData.limitMessage = '';
+                }
+            }
+
+            Utils.log('加载数据:', this.usageData.dailyStats[today], '限制状态:', this.usageData.isLimited);
         }
 
         saveData() {
@@ -792,22 +813,37 @@
         }
 
         checkPageForLimits() {
+            // 更精确的限制检测模式，避免匹配UI文字
             const limitPatterns = [
                 /you('ve| have) (reached|hit|exceeded)/i,
-                /rate limit/i,
+                /rate limit(ed)?/i,
                 /too many (requests|messages)/i,
-                /usage limit/i,
+                /usage limit reached/i,
                 /out of messages/i,
-                /message limit/i,
-                /限制/,
-                /超出/
+                /message limit reached/i,
+                /limit reached/i,
+                /您.{0,5}(已|达到|超出).{0,5}(用量|使用|消息)限制/,
+                /用量已(用完|耗尽|达到上限)/
             ];
 
-            const bodyText = document.body?.innerText || '';
+            // 排除我们自己的面板元素
+            const panel = document.getElementById('weiruan-claude-panel');
+            let bodyText = document.body?.innerText || '';
+
+            // 从检测文本中移除面板内容
+            if (panel) {
+                const panelText = panel.innerText || '';
+                bodyText = bodyText.replace(panelText, '');
+            }
+
+            // 只检测Claude主要内容区域
+            const mainContent = document.querySelector('main, [role="main"], .conversation-content');
+            const contentText = mainContent?.innerText || bodyText;
 
             for (const pattern of limitPatterns) {
-                if (pattern.test(bodyText)) {
+                if (pattern.test(contentText)) {
                     if (!this.usageData.isLimited) {
+                        Utils.log('检测到用量限制提示:', pattern.toString());
                         this.onRateLimitDetected();
                     }
                     return true;
@@ -925,6 +961,26 @@
         // 获取历史统计摘要
         getHistorySummary() {
             return this.historyManager.getStatsSummary();
+        }
+
+        // 手动清除限制状态
+        clearLimitStatus() {
+            this.usageData.isLimited = false;
+            this.usageData.limitDetectedAt = null;
+            this.usageData.estimatedResetTime = null;
+            this.usageData.limitMessage = '';
+            this.saveData();
+            this.updateUI();
+            Utils.log('已手动清除限制状态');
+        }
+
+        // 同步今日数据到历史（用于修复数据不同步问题）
+        syncTodayToHistory() {
+            const today = new Date().toDateString();
+            if (this.usageData.dailyStats[today]) {
+                this.historyManager.recordDailySummary(this.usageData.dailyStats[today]);
+                Utils.log('已同步今日数据到历史');
+            }
         }
     }
 
@@ -1512,6 +1568,7 @@
 
                     <div class="weiruan-actions-section">
                         <button class="weiruan-action-btn primary" id="weiruan-add">+1</button>
+                        <button class="weiruan-action-btn secondary" id="weiruan-clear-limit">清除限制</button>
                         <button class="weiruan-action-btn secondary" id="weiruan-export">导出</button>
                         <button class="weiruan-action-btn secondary" id="weiruan-reset">重置</button>
                     </div>
@@ -1546,6 +1603,11 @@
             document.getElementById('weiruan-add').addEventListener('click', () => {
                 this.detector.manualAddMessage(1);
                 this.showNotification('手动 +1');
+            });
+
+            document.getElementById('weiruan-clear-limit').addEventListener('click', () => {
+                this.detector.clearLimitStatus();
+                this.showNotification('已清除限制状态');
             });
 
             document.getElementById('weiruan-export').addEventListener('click', () => {
@@ -1797,9 +1859,11 @@
         window.weiruanPlanDetector = planDetector;
         window.weiruanHistoryManager = detector.historyManager;
 
-        // 暴露手动添加方法到控制台
+        // 暴露方法到控制台
         window.weiruanAddMessage = (count) => detector.manualAddMessage(count || 1);
         window.weiruanGetHistory = (days) => detector.getHistoryData(days || 7);
+        window.weiruanClearLimit = () => detector.clearLimitStatus();
+        window.weiruanSyncHistory = () => detector.syncTodayToHistory();
 
         setInterval(() => {
             detector.checkPageForLimits();
@@ -1812,6 +1876,8 @@
         Utils.log('提示: 可在控制台使用以下命令:');
         Utils.log('  - weiruanAddMessage(n): 手动添加n条消息计数');
         Utils.log('  - weiruanGetHistory(days): 获取历史数据');
+        Utils.log('  - weiruanClearLimit(): 清除限制状态');
+        Utils.log('  - weiruanSyncHistory(): 同步今日数据到历史');
     }
 
     // 等待页面加载
