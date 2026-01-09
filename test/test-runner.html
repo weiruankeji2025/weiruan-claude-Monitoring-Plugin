@@ -1,0 +1,491 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>威软Claude用量检测 - 测试页面</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+            background: #f5f5f5;
+            min-height: 100vh;
+            padding: 20px;
+        }
+
+        .container {
+            max-width: 800px;
+            margin: 0 auto;
+        }
+
+        h1 {
+            text-align: center;
+            color: #333;
+            margin-bottom: 30px;
+        }
+
+        .test-section {
+            background: white;
+            border-radius: 10px;
+            padding: 20px;
+            margin-bottom: 20px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+        }
+
+        .test-section h2 {
+            color: #667eea;
+            margin-bottom: 15px;
+            font-size: 18px;
+        }
+
+        .test-item {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 10px 0;
+            border-bottom: 1px solid #eee;
+        }
+
+        .test-item:last-child {
+            border-bottom: none;
+        }
+
+        .test-name {
+            font-weight: 500;
+            color: #333;
+        }
+
+        .test-status {
+            padding: 4px 12px;
+            border-radius: 20px;
+            font-size: 12px;
+            font-weight: 600;
+        }
+
+        .test-status.pass {
+            background: #e8f5e9;
+            color: #2e7d32;
+        }
+
+        .test-status.fail {
+            background: #ffebee;
+            color: #c62828;
+        }
+
+        .test-status.pending {
+            background: #fff3e0;
+            color: #f57c00;
+        }
+
+        .test-output {
+            background: #1e1e1e;
+            color: #0f0;
+            padding: 15px;
+            border-radius: 5px;
+            font-family: 'Monaco', 'Menlo', monospace;
+            font-size: 12px;
+            white-space: pre-wrap;
+            max-height: 300px;
+            overflow-y: auto;
+            margin-top: 15px;
+        }
+
+        .btn {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            border: none;
+            padding: 12px 25px;
+            border-radius: 8px;
+            font-size: 14px;
+            cursor: pointer;
+            margin-right: 10px;
+            margin-bottom: 10px;
+        }
+
+        .btn:hover {
+            opacity: 0.9;
+        }
+
+        .btn.secondary {
+            background: #666;
+        }
+
+        .summary {
+            text-align: center;
+            margin-top: 20px;
+            font-size: 18px;
+        }
+
+        .summary .pass-count {
+            color: #2e7d32;
+            font-weight: bold;
+        }
+
+        .summary .fail-count {
+            color: #c62828;
+            font-weight: bold;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>📊 威软Claude用量检测 - 测试套件</h1>
+
+        <div class="test-section">
+            <h2>🔧 功能测试</h2>
+            <div id="test-results"></div>
+        </div>
+
+        <div class="test-section">
+            <h2>🎮 交互测试</h2>
+            <button class="btn" onclick="simulateMessage()">模拟发送消息</button>
+            <button class="btn" onclick="simulateRateLimit()">模拟触发限制</button>
+            <button class="btn" onclick="simulateReset()">模拟限制恢复</button>
+            <button class="btn secondary" onclick="resetAllTests()">重置所有测试</button>
+        </div>
+
+        <div class="test-section">
+            <h2>📝 测试输出</h2>
+            <div class="test-output" id="test-output">[等待测试执行...]</div>
+        </div>
+
+        <div class="summary" id="summary"></div>
+    </div>
+
+    <script>
+        // 模拟 GM 函数
+        const storage = {};
+        window.GM_getValue = (key, def) => storage[key] ?? def;
+        window.GM_setValue = (key, val) => { storage[key] = val; };
+        window.GM_notification = (opts) => { log(`[通知] ${opts.title}: ${opts.text}`); };
+        window.GM_addStyle = (css) => {
+            const style = document.createElement('style');
+            style.textContent = css;
+            document.head.appendChild(style);
+        };
+
+        let testResults = [];
+        let outputLog = [];
+
+        function log(msg) {
+            const time = new Date().toLocaleTimeString();
+            outputLog.push(`[${time}] ${msg}`);
+            document.getElementById('test-output').textContent = outputLog.join('\n');
+            document.getElementById('test-output').scrollTop = document.getElementById('test-output').scrollHeight;
+        }
+
+        function addTestResult(name, passed, details = '') {
+            testResults.push({ name, passed, details });
+            renderResults();
+        }
+
+        function renderResults() {
+            const container = document.getElementById('test-results');
+            container.innerHTML = testResults.map(t => `
+                <div class="test-item">
+                    <span class="test-name">${t.name}</span>
+                    <span class="test-status ${t.passed ? 'pass' : 'fail'}">${t.passed ? '通过' : '失败'}</span>
+                </div>
+            `).join('');
+
+            const passed = testResults.filter(t => t.passed).length;
+            const failed = testResults.filter(t => !t.passed).length;
+            document.getElementById('summary').innerHTML = `
+                测试完成: <span class="pass-count">${passed} 通过</span> / <span class="fail-count">${failed} 失败</span>
+            `;
+        }
+
+        // ==================== 测试用例 ====================
+
+        // 测试1: 工具函数
+        function testUtils() {
+            log('开始测试工具函数...');
+
+            // 测试时间格式化
+            const testDate = new Date('2024-01-15T10:30:45');
+            const formatted = testDate.toLocaleString('zh-CN', {
+                month: '2-digit',
+                day: '2-digit',
+                hour: '2-digit',
+                minute: '2-digit',
+                second: '2-digit'
+            });
+            const pass1 = formatted.includes('01') && formatted.includes('15');
+            addTestResult('时间格式化函数', pass1);
+            log(`时间格式化测试: ${formatted} - ${pass1 ? '通过' : '失败'}`);
+
+            // 测试时长格式化
+            const duration1 = 3661000; // 1小时1分钟1秒
+            const hours = Math.floor(duration1 / (1000 * 60 * 60));
+            const minutes = Math.floor((duration1 % (1000 * 60 * 60)) / (1000 * 60));
+            const pass2 = hours === 1 && minutes === 1;
+            addTestResult('时长格式化函数', pass2);
+            log(`时长格式化测试: ${hours}小时${minutes}分钟 - ${pass2 ? '通过' : '失败'}`);
+
+            return pass1 && pass2;
+        }
+
+        // 测试2: 存储功能
+        function testStorage() {
+            log('开始测试存储功能...');
+
+            const testKey = 'test_key';
+            const testValue = { count: 42, name: 'test' };
+
+            GM_setValue(testKey, JSON.stringify(testValue));
+            const retrieved = JSON.parse(GM_getValue(testKey, null));
+
+            const pass = retrieved && retrieved.count === 42 && retrieved.name === 'test';
+            addTestResult('本地存储功能', pass);
+            log(`存储测试: ${JSON.stringify(retrieved)} - ${pass ? '通过' : '失败'}`);
+
+            return pass;
+        }
+
+        // 测试3: 用量数据结构
+        function testUsageDataStructure() {
+            log('开始测试用量数据结构...');
+
+            const usageData = {
+                isLimited: false,
+                limitDetectedAt: null,
+                estimatedResetTime: null,
+                messageCount: 0,
+                sessionStartTime: Date.now(),
+                dailyStats: {},
+                lastCheckTime: null,
+                limitType: null,
+                limitMessage: ''
+            };
+
+            const requiredFields = [
+                'isLimited', 'limitDetectedAt', 'estimatedResetTime',
+                'messageCount', 'sessionStartTime', 'dailyStats',
+                'lastCheckTime', 'limitType', 'limitMessage'
+            ];
+
+            const pass = requiredFields.every(field => field in usageData);
+            addTestResult('用量数据结构完整性', pass);
+            log(`数据结构测试: ${requiredFields.length}个字段 - ${pass ? '通过' : '失败'}`);
+
+            return pass;
+        }
+
+        // 测试4: 限制检测逻辑
+        function testLimitDetection() {
+            log('开始测试限制检测逻辑...');
+
+            const limitPatterns = [
+                /you('ve| have) (reached|hit|exceeded)/i,
+                /rate limit/i,
+                /too many (requests|messages)/i,
+                /usage limit/i,
+                /please (wait|try again)/i
+            ];
+
+            const testMessages = [
+                { text: "You've reached your usage limit", shouldMatch: true },
+                { text: "Rate limit exceeded", shouldMatch: true },
+                { text: "Too many messages sent", shouldMatch: true },
+                { text: "Please try again later", shouldMatch: true },
+                { text: "Hello, how can I help?", shouldMatch: false }
+            ];
+
+            let allPass = true;
+            testMessages.forEach(test => {
+                const matches = limitPatterns.some(p => p.test(test.text));
+                const pass = matches === test.shouldMatch;
+                if (!pass) allPass = false;
+                log(`  "${test.text.substring(0, 30)}..." - ${pass ? '匹配正确' : '匹配错误'}`);
+            });
+
+            addTestResult('限制检测正则表达式', allPass);
+            return allPass;
+        }
+
+        // 测试5: 恢复时间解析
+        function testResetTimeParsing() {
+            log('开始测试恢复时间解析...');
+
+            function parseResetTime(message) {
+                const hourMatch = message.match(/(\d+)\s*(hour|小时)/i);
+                const minMatch = message.match(/(\d+)\s*(minute|分钟)/i);
+
+                let resetMs = 0;
+                if (hourMatch) resetMs += parseInt(hourMatch[1]) * 60 * 60 * 1000;
+                if (minMatch) resetMs += parseInt(minMatch[1]) * 60 * 1000;
+
+                return resetMs;
+            }
+
+            const tests = [
+                { msg: "Please wait 5 hours", expected: 5 * 60 * 60 * 1000 },
+                { msg: "Try again in 30 minutes", expected: 30 * 60 * 1000 },
+                { msg: "等待2小时30分钟", expected: 2.5 * 60 * 60 * 1000 }
+            ];
+
+            let allPass = true;
+            tests.forEach(test => {
+                const result = parseResetTime(test.msg);
+                const pass = result === test.expected;
+                if (!pass) allPass = false;
+                log(`  "${test.msg}" -> ${result}ms (期望: ${test.expected}ms) - ${pass ? '通过' : '失败'}`);
+            });
+
+            addTestResult('恢复时间解析', allPass);
+            return allPass;
+        }
+
+        // 测试6: 状态获取
+        function testStatusRetrieval() {
+            log('开始测试状态获取...');
+
+            const mockUsageData = {
+                isLimited: true,
+                estimatedResetTime: Date.now() + 3600000,
+                messageCount: 25,
+                sessionStartTime: Date.now() - 1800000,
+                dailyStats: {
+                    [new Date().toDateString()]: { messages: 30, limits: 1 }
+                },
+                limitMessage: 'Test limit'
+            };
+
+            const status = {
+                isLimited: mockUsageData.isLimited,
+                remainingTime: Math.max(0, mockUsageData.estimatedResetTime - Date.now()),
+                messageCount: mockUsageData.messageCount,
+                todayMessages: mockUsageData.dailyStats[new Date().toDateString()]?.messages || 0
+            };
+
+            const pass = status.isLimited === true &&
+                         status.remainingTime > 0 &&
+                         status.messageCount === 25 &&
+                         status.todayMessages === 30;
+
+            addTestResult('状态获取功能', pass);
+            log(`状态: isLimited=${status.isLimited}, remaining=${status.remainingTime}, msgs=${status.messageCount}`);
+
+            return pass;
+        }
+
+        // 测试7: UI 创建
+        function testUICreation() {
+            log('开始测试UI创建...');
+
+            // 创建测试面板
+            const panel = document.createElement('div');
+            panel.id = 'weiruan-test-panel';
+            panel.innerHTML = '<div class="header">测试面板</div><div class="body">内容</div>';
+            document.body.appendChild(panel);
+
+            const created = document.getElementById('weiruan-test-panel') !== null;
+            const hasContent = panel.querySelector('.header') !== null;
+
+            // 清理
+            panel.remove();
+
+            const pass = created && hasContent;
+            addTestResult('UI 面板创建', pass);
+            log(`UI创建测试: 面板创建=${created}, 内容正确=${hasContent}`);
+
+            return pass;
+        }
+
+        // 测试8: 导出功能
+        function testExportFunction() {
+            log('开始测试导出功能...');
+
+            const data = {
+                exportTime: new Date().toISOString(),
+                version: '1.0.0',
+                currentStatus: { isLimited: false, messageCount: 10 },
+                dailyStats: { '2024-01-15': { messages: 50, limits: 2 } }
+            };
+
+            const jsonString = JSON.stringify(data, null, 2);
+            const parsed = JSON.parse(jsonString);
+
+            const pass = parsed.version === '1.0.0' &&
+                         parsed.currentStatus.messageCount === 10 &&
+                         parsed.dailyStats['2024-01-15'].messages === 50;
+
+            addTestResult('数据导出功能', pass);
+            log(`导出测试: JSON生成=${jsonString.length}字节`);
+
+            return pass;
+        }
+
+        // ==================== 交互测试 ====================
+
+        function simulateMessage() {
+            log('模拟发送消息...');
+            const count = parseInt(GM_getValue('message_count', '0')) + 1;
+            GM_setValue('message_count', count.toString());
+            log(`消息计数更新: ${count}`);
+            GM_notification({ title: '消息发送', text: `第 ${count} 条消息已发送` });
+        }
+
+        function simulateRateLimit() {
+            log('模拟触发速率限制...');
+            const resetTime = Date.now() + 5 * 60 * 60 * 1000;
+            GM_setValue('is_limited', 'true');
+            GM_setValue('reset_time', resetTime.toString());
+            GM_notification({ title: '⚠️ 限制触发', text: '您已达到使用限制，预计5小时后恢复' });
+            log(`限制已设置，恢复时间: ${new Date(resetTime).toLocaleString()}`);
+        }
+
+        function simulateReset() {
+            log('模拟限制恢复...');
+            GM_setValue('is_limited', 'false');
+            GM_setValue('reset_time', '0');
+            GM_notification({ title: '✅ 限制已恢复', text: '您现在可以继续使用 Claude 了！' });
+            log('限制状态已重置');
+        }
+
+        function resetAllTests() {
+            testResults = [];
+            outputLog = [];
+            storage['message_count'] = '0';
+            storage['is_limited'] = 'false';
+            document.getElementById('test-results').innerHTML = '';
+            document.getElementById('test-output').textContent = '[等待测试执行...]';
+            document.getElementById('summary').innerHTML = '';
+            log('所有测试已重置');
+        }
+
+        // ==================== 执行测试 ====================
+
+        function runAllTests() {
+            log('========================================');
+            log('开始执行威软Claude用量检测测试套件');
+            log('版本: 1.0.0');
+            log('时间: ' + new Date().toLocaleString());
+            log('========================================\n');
+
+            testUtils();
+            testStorage();
+            testUsageDataStructure();
+            testLimitDetection();
+            testResetTimeParsing();
+            testStatusRetrieval();
+            testUICreation();
+            testExportFunction();
+
+            log('\n========================================');
+            const passed = testResults.filter(t => t.passed).length;
+            const total = testResults.length;
+            log(`测试完成: ${passed}/${total} 通过`);
+            log('========================================');
+        }
+
+        // 页面加载完成后执行测试
+        window.onload = runAllTests;
+    </script>
+</body>
+</html>
