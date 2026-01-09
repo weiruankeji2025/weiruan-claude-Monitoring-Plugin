@@ -982,6 +982,55 @@
                 Utils.log('已同步今日数据到历史');
             }
         }
+
+        // 强制同步所有每日数据到历史
+        forceSyncAllHistory() {
+            const dailyStats = this.usageData.dailyStats;
+            let syncCount = 0;
+
+            for (const dateStr in dailyStats) {
+                const stat = dailyStats[dateStr];
+                if (stat && stat.messages > 0) {
+                    // 创建历史记录
+                    const timestamp = new Date(dateStr).getTime();
+                    const existingIndex = this.historyManager.historyData.findIndex(r =>
+                        new Date(r.timestamp).toDateString() === dateStr
+                    );
+
+                    const record = {
+                        timestamp: timestamp,
+                        date: dateStr,
+                        messages: stat.messages || 0,
+                        limits: stat.limits || 0,
+                        updatedAt: Date.now()
+                    };
+
+                    if (existingIndex >= 0) {
+                        this.historyManager.historyData[existingIndex] = record;
+                    } else {
+                        this.historyManager.historyData.push(record);
+                    }
+                    syncCount++;
+                }
+            }
+
+            // 按时间排序并保存
+            this.historyManager.historyData.sort((a, b) => a.timestamp - b.timestamp);
+            this.historyManager.saveHistory();
+            this.updateUI();
+
+            Utils.log(`已强制同步 ${syncCount} 条历史记录`);
+            return syncCount;
+        }
+
+        // 强制重新加载所有数据
+        forceReloadData() {
+            this.loadData();
+            this.historyManager.loadHistory();
+            this.forceSyncAllHistory();
+            this.updateUI();
+            Utils.log('已强制重新加载所有数据');
+        }
     }
 
     // ==================== UI 组件 ====================
@@ -1568,6 +1617,7 @@
 
                     <div class="weiruan-actions-section">
                         <button class="weiruan-action-btn primary" id="weiruan-add">+1</button>
+                        <button class="weiruan-action-btn primary" id="weiruan-sync">同步</button>
                         <button class="weiruan-action-btn secondary" id="weiruan-clear-limit">清除限制</button>
                         <button class="weiruan-action-btn secondary" id="weiruan-export">导出</button>
                         <button class="weiruan-action-btn secondary" id="weiruan-reset">重置</button>
@@ -1603,6 +1653,11 @@
             document.getElementById('weiruan-add').addEventListener('click', () => {
                 this.detector.manualAddMessage(1);
                 this.showNotification('手动 +1');
+            });
+
+            document.getElementById('weiruan-sync').addEventListener('click', () => {
+                const count = this.detector.forceSyncAllHistory();
+                this.showNotification(`已同步 ${count} 条数据`);
             });
 
             document.getElementById('weiruan-clear-limit').addEventListener('click', () => {
@@ -1864,6 +1919,8 @@
         window.weiruanGetHistory = (days) => detector.getHistoryData(days || 7);
         window.weiruanClearLimit = () => detector.clearLimitStatus();
         window.weiruanSyncHistory = () => detector.syncTodayToHistory();
+        window.weiruanForceSyncAll = () => detector.forceSyncAllHistory();
+        window.weiruanReload = () => detector.forceReloadData();
 
         setInterval(() => {
             detector.checkPageForLimits();
@@ -1878,6 +1935,11 @@
         Utils.log('  - weiruanGetHistory(days): 获取历史数据');
         Utils.log('  - weiruanClearLimit(): 清除限制状态');
         Utils.log('  - weiruanSyncHistory(): 同步今日数据到历史');
+        Utils.log('  - weiruanForceSyncAll(): 强制同步所有历史数据');
+        Utils.log('  - weiruanReload(): 强制重新加载所有数据');
+
+        // 初始化时自动同步历史数据
+        detector.forceSyncAllHistory();
     }
 
     // 等待页面加载
