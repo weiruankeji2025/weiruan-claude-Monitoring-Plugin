@@ -144,9 +144,35 @@
             for (let i = 6; i >= 0; i--) {
                 const date = new Date();
                 date.setDate(date.getDate() - i);
-                days.push(date.toDateString());
+                days.push(Utils.getDateKey(date));
             }
             return days;
+        },
+
+        // 统一日期格式 YYYY-MM-DD
+        getDateKey: (date = new Date()) => {
+            const d = new Date(date);
+            const year = d.getFullYear();
+            const month = String(d.getMonth() + 1).padStart(2, '0');
+            const day = String(d.getDate()).padStart(2, '0');
+            return `${year}-${month}-${day}`;
+        },
+
+        // 解析日期键
+        parseDateKey: (dateKey) => {
+            const [year, month, day] = dateKey.split('-').map(Number);
+            return new Date(year, month - 1, day);
+        },
+
+        // 获取日期的显示信息
+        getDateInfo: (dateKey) => {
+            const date = Utils.parseDateKey(dateKey);
+            return {
+                dateKey: dateKey,
+                shortDate: `${date.getMonth() + 1}/${date.getDate()}`,
+                dayName: ['日', '一', '二', '三', '四', '五', '六'][date.getDay()],
+                timestamp: date.getTime()
+            };
         },
 
         // 防抖函数
@@ -569,82 +595,114 @@
         }
     }
 
-    // ==================== 历史数据管理器 ====================
+    // ==================== 历史数据管理器（重构版） ====================
     class HistoryManager {
         constructor() {
-            this.historyData = [];
+            // 使用对象存储，key为日期 YYYY-MM-DD
+            this.historyMap = {};
             this.loadHistory();
         }
 
         loadHistory() {
-            const saved = Utils.storage.get('historyData', []);
-            this.historyData = Array.isArray(saved) ? saved : [];
-            this.cleanOldHistory();
-            Utils.log('加载历史数据:', this.historyData.length, '条记录');
+            try {
+                const saved = Utils.storage.get('historyDataV2', null);
+                if (saved && typeof saved === 'object') {
+                    this.historyMap = saved;
+                } else {
+                    // 尝试迁移旧数据
+                    this.migrateOldData();
+                }
+                this.cleanOldHistory();
+                Utils.log('历史数据加载完成:', Object.keys(this.historyMap).length, '天记录');
+                Utils.log('历史数据内容:', this.historyMap);
+            } catch (e) {
+                Utils.log('加载历史数据失败:', e);
+                this.historyMap = {};
+            }
+        }
+
+        // 迁移旧版本数据
+        migrateOldData() {
+            const oldData = Utils.storage.get('historyData', []);
+            if (Array.isArray(oldData) && oldData.length > 0) {
+                Utils.log('迁移旧版历史数据...');
+                oldData.forEach(record => {
+                    if (record.timestamp) {
+                        const dateKey = Utils.getDateKey(new Date(record.timestamp));
+                        this.historyMap[dateKey] = {
+                            messages: record.messages || 0,
+                            limits: record.limits || 0
+                        };
+                    }
+                });
+                this.saveHistory();
+                Utils.log('旧数据迁移完成');
+            }
         }
 
         saveHistory() {
-            Utils.storage.set('historyData', this.historyData);
+            try {
+                Utils.storage.set('historyDataV2', this.historyMap);
+                Utils.log('历史数据已保存');
+            } catch (e) {
+                Utils.log('保存历史数据失败:', e);
+            }
         }
 
         cleanOldHistory() {
             const cutoffDate = new Date();
             cutoffDate.setDate(cutoffDate.getDate() - CONFIG.HISTORY_DAYS);
-            const cutoffTime = cutoffDate.getTime();
+            const cutoffKey = Utils.getDateKey(cutoffDate);
 
-            this.historyData = this.historyData.filter(record => record.timestamp >= cutoffTime);
-            this.saveHistory();
+            const keys = Object.keys(this.historyMap);
+            let removed = 0;
+            keys.forEach(key => {
+                if (key < cutoffKey) {
+                    delete this.historyMap[key];
+                    removed++;
+                }
+            });
+
+            if (removed > 0) {
+                Utils.log(`清理了 ${removed} 条过期历史数据`);
+                this.saveHistory();
+            }
         }
 
-        // 记录每日汇总数据
-        recordDailySummary(dailyStats) {
-            const today = new Date().toDateString();
-            const todayTimestamp = new Date(today).getTime();
-
-            // 检查今天是否已有记录
-            const existingIndex = this.historyData.findIndex(r =>
-                new Date(r.timestamp).toDateString() === today
-            );
-
-            const record = {
-                timestamp: todayTimestamp,
-                date: today,
-                messages: dailyStats.messages || 0,
-                limits: dailyStats.limits || 0,
-                updatedAt: Date.now()
+        // 记录或更新某天的数据
+        setDayData(dateKey, messages, limits = 0) {
+            this.historyMap[dateKey] = {
+                messages: messages,
+                limits: limits
             };
-
-            if (existingIndex >= 0) {
-                this.historyData[existingIndex] = record;
-            } else {
-                this.historyData.push(record);
-            }
-
-            // 按时间排序
-            this.historyData.sort((a, b) => a.timestamp - b.timestamp);
             this.saveHistory();
+            Utils.log(`记录历史数据 [${dateKey}]:`, { messages, limits });
+        }
+
+        // 获取某天的数据
+        getDayData(dateKey) {
+            return this.historyMap[dateKey] || { messages: 0, limits: 0 };
         }
 
         // 获取最近N天的历史数据
         getRecentHistory(days = 7) {
             const result = [];
-            const now = new Date();
+            const today = new Date();
 
             for (let i = days - 1; i >= 0; i--) {
-                const date = new Date(now);
+                const date = new Date(today);
                 date.setDate(date.getDate() - i);
-                const dateStr = date.toDateString();
-
-                const record = this.historyData.find(r =>
-                    new Date(r.timestamp).toDateString() === dateStr
-                );
+                const dateKey = Utils.getDateKey(date);
+                const data = this.getDayData(dateKey);
+                const info = Utils.getDateInfo(dateKey);
 
                 result.push({
-                    date: dateStr,
-                    shortDate: `${date.getMonth() + 1}/${date.getDate()}`,
-                    dayName: ['日', '一', '二', '三', '四', '五', '六'][date.getDay()],
-                    messages: record?.messages || 0,
-                    limits: record?.limits || 0
+                    dateKey: dateKey,
+                    date: dateKey,
+                    shortDate: info.shortDate,
+                    dayName: info.dayName,
+                    messages: data.messages,
+                    limits: data.limits
                 });
             }
 
@@ -663,7 +721,7 @@
 
             const avg7 = Math.round(sum7 / 7);
             const avg30 = Math.round(sum30 / 30);
-            const max7 = Math.max(...last7Days.map(d => d.messages));
+            const max7 = Math.max(...last7Days.map(d => d.messages), 0);
             const maxDay = last7Days.find(d => d.messages === max7);
 
             return {
@@ -720,17 +778,20 @@
         }
 
         loadData() {
-            const saved = Utils.storage.get('usageData');
+            const saved = Utils.storage.get('usageDataV2');
             if (saved) {
                 this.usageData = { ...this.usageData, ...saved };
+            } else {
+                // 尝试迁移旧数据
+                this.migrateOldUsageData();
             }
 
-            const today = new Date().toDateString();
+            const today = Utils.getDateKey();
             if (!this.usageData.dailyStats) {
                 this.usageData.dailyStats = {};
             }
             if (!this.usageData.dailyStats[today]) {
-                this.usageData.dailyStats[today] = { messages: 0, limits: 0, timestamp: Date.now() };
+                this.usageData.dailyStats[today] = { messages: 0, limits: 0 };
             }
 
             // 检查限制状态是否应该被重置（如果限制时间已过）
@@ -744,21 +805,49 @@
                 }
             }
 
-            Utils.log('加载数据:', this.usageData.dailyStats[today], '限制状态:', this.usageData.isLimited);
+            Utils.log('加载用量数据:', this.usageData.dailyStats[today], '限制状态:', this.usageData.isLimited);
+        }
+
+        // 迁移旧版用量数据
+        migrateOldUsageData() {
+            const oldData = Utils.storage.get('usageData');
+            if (oldData && oldData.dailyStats) {
+                Utils.log('迁移旧版用量数据...');
+                const newDailyStats = {};
+                for (const dateStr in oldData.dailyStats) {
+                    try {
+                        const date = new Date(dateStr);
+                        if (!isNaN(date.getTime())) {
+                            const dateKey = Utils.getDateKey(date);
+                            newDailyStats[dateKey] = {
+                                messages: oldData.dailyStats[dateStr].messages || 0,
+                                limits: oldData.dailyStats[dateStr].limits || 0
+                            };
+                        }
+                    } catch (e) {
+                        Utils.log('迁移日期失败:', dateStr);
+                    }
+                }
+                this.usageData.dailyStats = newDailyStats;
+                this.usageData.messageCount = oldData.messageCount || 0;
+                this.saveData();
+                Utils.log('旧用量数据迁移完成');
+            }
         }
 
         saveData() {
-            Utils.storage.set('usageData', this.usageData);
+            Utils.storage.set('usageDataV2', this.usageData);
         }
 
         cleanOldStats() {
-            const thirtyDaysAgo = Date.now() - (30 * 24 * 60 * 60 * 1000);
-            const dailyStats = this.usageData.dailyStats;
+            const cutoffDate = new Date();
+            cutoffDate.setDate(cutoffDate.getDate() - CONFIG.HISTORY_DAYS);
+            const cutoffKey = Utils.getDateKey(cutoffDate);
 
-            for (const dateStr in dailyStats) {
-                const stat = dailyStats[dateStr];
-                if (stat.timestamp && stat.timestamp < thirtyDaysAgo) {
-                    delete dailyStats[dateStr];
+            const dailyStats = this.usageData.dailyStats;
+            for (const dateKey in dailyStats) {
+                if (dateKey < cutoffKey) {
+                    delete dailyStats[dateKey];
                 }
             }
 
@@ -766,18 +855,18 @@
         }
 
         onMessageSent() {
-            const today = new Date().toDateString();
+            const today = Utils.getDateKey();
             this.usageData.messageCount++;
 
             if (!this.usageData.dailyStats[today]) {
-                this.usageData.dailyStats[today] = { messages: 0, limits: 0, timestamp: Date.now() };
+                this.usageData.dailyStats[today] = { messages: 0, limits: 0 };
             }
             this.usageData.dailyStats[today].messages++;
 
             this.saveData();
 
-            // 记录到历史数据
-            this.historyManager.recordDailySummary(this.usageData.dailyStats[today]);
+            // 同步到历史数据
+            this.syncToHistory(today);
 
             this.updateUI();
 
@@ -785,6 +874,14 @@
                 session: this.usageData.messageCount,
                 today: this.usageData.dailyStats[today].messages
             });
+        }
+
+        // 同步某天数据到历史
+        syncToHistory(dateKey) {
+            const stat = this.usageData.dailyStats[dateKey];
+            if (stat) {
+                this.historyManager.setDayData(dateKey, stat.messages, stat.limits);
+            }
         }
 
         onRateLimitDetected() {
@@ -796,15 +893,15 @@
             this.usageData.estimatedResetTime = now + (planConfig.resetPeriodHours * 60 * 60 * 1000);
             this.usageData.limitType = 'rate_limit';
 
-            const today = new Date().toDateString();
+            const today = Utils.getDateKey();
             if (this.usageData.dailyStats[today]) {
                 this.usageData.dailyStats[today].limits++;
             }
 
             this.saveData();
 
-            // 记录到历史数据
-            this.historyManager.recordDailySummary(this.usageData.dailyStats[today]);
+            // 同步到历史数据
+            this.syncToHistory(today);
 
             this.updateUI();
 
@@ -872,7 +969,7 @@
 
         getUsagePercentage() {
             const planConfig = this.planDetector.getPlanConfig();
-            const today = new Date().toDateString();
+            const today = Utils.getDateKey();
             const todayStats = this.usageData.dailyStats[today] || { messages: 0 };
 
             const dailyUsage = todayStats.messages;
@@ -907,7 +1004,7 @@
                 }
             }
 
-            const today = new Date().toDateString();
+            const today = Utils.getDateKey();
             const todayStats = this.usageData.dailyStats[today] || { messages: 0, limits: 0 };
             const usagePercentage = this.getUsagePercentage();
 
@@ -974,13 +1071,11 @@
             Utils.log('已手动清除限制状态');
         }
 
-        // 同步今日数据到历史（用于修复数据不同步问题）
+        // 同步今日数据到历史
         syncTodayToHistory() {
-            const today = new Date().toDateString();
-            if (this.usageData.dailyStats[today]) {
-                this.historyManager.recordDailySummary(this.usageData.dailyStats[today]);
-                Utils.log('已同步今日数据到历史');
-            }
+            const today = Utils.getDateKey();
+            this.syncToHistory(today);
+            Utils.log('已同步今日数据到历史');
         }
 
         // 强制同步所有每日数据到历史
@@ -988,37 +1083,15 @@
             const dailyStats = this.usageData.dailyStats;
             let syncCount = 0;
 
-            for (const dateStr in dailyStats) {
-                const stat = dailyStats[dateStr];
-                if (stat && stat.messages > 0) {
-                    // 创建历史记录
-                    const timestamp = new Date(dateStr).getTime();
-                    const existingIndex = this.historyManager.historyData.findIndex(r =>
-                        new Date(r.timestamp).toDateString() === dateStr
-                    );
-
-                    const record = {
-                        timestamp: timestamp,
-                        date: dateStr,
-                        messages: stat.messages || 0,
-                        limits: stat.limits || 0,
-                        updatedAt: Date.now()
-                    };
-
-                    if (existingIndex >= 0) {
-                        this.historyManager.historyData[existingIndex] = record;
-                    } else {
-                        this.historyManager.historyData.push(record);
-                    }
+            for (const dateKey in dailyStats) {
+                const stat = dailyStats[dateKey];
+                if (stat && (stat.messages > 0 || stat.limits > 0)) {
+                    this.historyManager.setDayData(dateKey, stat.messages || 0, stat.limits || 0);
                     syncCount++;
                 }
             }
 
-            // 按时间排序并保存
-            this.historyManager.historyData.sort((a, b) => a.timestamp - b.timestamp);
-            this.historyManager.saveHistory();
             this.updateUI();
-
             Utils.log(`已强制同步 ${syncCount} 条历史记录`);
             return syncCount;
         }
@@ -1803,14 +1876,14 @@
 
             if (!chartContainer) return;
 
-            const today = new Date().toDateString();
+            const today = Utils.getDateKey();
             const maxMessages = Math.max(...historyData.map(d => d.messages), 1);
 
             // 生成柱状图
             let chartHTML = '';
             historyData.forEach((data, index) => {
                 const height = Math.max(4, (data.messages / maxMessages) * 100);
-                const isToday = data.date === today;
+                const isToday = data.dateKey === today;
                 const hasLimit = data.limits > 0;
 
                 let barClass = 'weiruan-chart-bar';
