@@ -794,12 +794,25 @@
             const panel = document.createElement('div');
             panel.id = 'weiruan-panel';
 
-            // 应用保存的位置
-            if (PanelState.position.x !== null) {
-                panel.style.left = PanelState.position.x + 'px';
-                panel.style.top = PanelState.position.y + 'px';
-                panel.style.right = 'auto';
-                panel.style.bottom = 'auto';
+            // 应用保存的位置，并校验是否在可视区域内
+            if (PanelState.position.x !== null && PanelState.position.y !== null) {
+                let x = PanelState.position.x;
+                let y = PanelState.position.y;
+
+                // 确保位置在可视区域内
+                const maxX = window.innerWidth - 60;
+                const maxY = window.innerHeight - 60;
+
+                if (x >= 0 && x <= maxX && y >= 0 && y <= maxY) {
+                    panel.style.left = x + 'px';
+                    panel.style.top = y + 'px';
+                    panel.style.right = 'auto';
+                    panel.style.bottom = 'auto';
+                } else {
+                    // 位置无效，重置为默认
+                    PanelState.position = { x: null, y: null };
+                    PanelState.save();
+                }
             }
 
             if (!PanelState.isExpanded) {
@@ -1132,7 +1145,24 @@
         // 暴露手动刷新方法
         window.weiruanRefresh = () => panel.refreshData(true);
 
+        // 暴露重置位置方法
+        window.weiruanResetPosition = () => {
+            PanelState.position = { x: null, y: null };
+            PanelState.isExpanded = true;
+            PanelState.save();
+            const panelEl = document.getElementById('weiruan-panel');
+            if (panelEl) {
+                panelEl.style.left = '';
+                panelEl.style.top = '';
+                panelEl.style.right = '20px';
+                panelEl.style.bottom = '20px';
+                panelEl.classList.remove('collapsed');
+            }
+            console.log('%c[威软Claude监控] 位置已重置', 'color: #667eea;');
+        };
+
         console.log('%c[威软Claude监控] v' + CONFIG.VERSION + ' 已启动', 'color: #667eea; font-weight: bold;');
+        console.log('%c如果看不到悬浮窗，请在控制台执行: weiruanResetPosition()', 'color: #888;');
     }
 
     if (document.readyState === 'loading') {
